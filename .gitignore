@@ -1,0 +1,15 @@
+# Environment
+.env
+.env.local
+
+# Data files
+data/*.json
+nhl_players.json
+
+# Python
+__pycache__/
+*.py[cod]
+
+# IDE
+.vscode/
+.idea/
