@@ -26,7 +26,6 @@ def fetch_players() -> Dict[str, Any]:
         if res.status != 200:
             raise Exception(f"API request failed with status {res.status}: {res.reason}")
         
-        # Read and decode the response before closing connection
         raw_data = res.read().decode('utf-8')
         return json.loads(raw_data)
         
@@ -48,7 +47,6 @@ def main() -> bool:
             print("Received empty response from API")
             return False
             
-        print(f"Successfully retrieved data for {len(player_data.get('players', []))} players")
         save_players(player_data)
         return True
         
