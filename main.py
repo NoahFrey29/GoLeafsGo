@@ -1,86 +1,55 @@
-from flask import Flask
-from flask_restful import Api, Resource, reqparse, abort, fields, marshal_with
-from flask_sqlalchemy import SQLAlchemy
+import json
+from pathlib import Path
+from data_ingestion import main as fetch_data
+from data_processing import PlayerDataProcessor
+from database import app, PlayerList 
 
-app = Flask(__name__)
-api = Api(app)
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///players.db'
-db = SQLAlchemy(app)
+def main():
+    print("Starting NHL Player Data Pipeline")
+    print("=" * 50)
+    
+    # Ingest data from data_ingestion.py
+    print("\n[1/3] Fetching raw player data...")
+    if not fetch_data():
+        print("Failed to fetch data from API")
+        return False
+    
+    # Process data from data_processing.py
+    print("\n[2/3] Processing data...")
+    processor = PlayerDataProcessor(Path("data/nhl_players.json"))
+    try:
+        processor.load_data()
+        processed_data = processor.process_players()
+        processor.save_processed_data(Path("data/processed_players.json"), processed_data)
+        print(f"Processed {len(processed_data)} players")
+    except Exception as e:
+        print(f"Processing failed: {e}")
+        return False
+    
+    # Store the data using the API Database integration from database.py
+    print("\n[3/3] Loading to database...")
+    with app.app_context():
+        try:
+            with open("data/processed_players.json", 'r') as f:
+                players_data = json.load(f)
 
-class VideoModel(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(100), nullable=False)
-    views = db.Column(db.Integer, nullable=False)
-    likes = db.Column(db.Integer, nullable=False)
+            print(players_data)
 
-    def __repr__(self):
-        return f"Video(name={self.name}, views={self.views}, likes={self.likes})"
-
-with app.app_context():
-    db.create_all()
-
-video_put_args = reqparse.RequestParser()
-video_put_args.add_argument("name", type=str, help="Name of the video is required", required=True)
-video_put_args.add_argument("views", type=int, help="Views of the video is required", required=True)
-video_put_args.add_argument("likes", type=int, help="Likes on the video is required", required=True)
-
-video_update_args = reqparse.RequestParser()
-video_update_args.add_argument("name", type=str, help="Name of the video is required")
-video_update_args.add_argument("views", type=int, help="Views of the video is required")
-video_update_args.add_argument("likes", type=int, help="Likes on the video is required")
-
-resource_fields = {
-    'id': fields.Integer,
-    'name': fields.String,
-    'views': fields.Integer,
-    'likes': fields.Integer
-}
-
-class Video(Resource):
-    @marshal_with(resource_fields)
-    def get(self, video_id):
-        result = VideoModel.query.filter_by(id=video_id).first()
-        if not result:
-            abort(404, message="Could not find video with that ID...")
-        return result
-
-    @marshal_with(resource_fields)
-    def put(self, video_id):
-        args = video_put_args.parse_args()
-        result = VideoModel.query.filter_by(id=video_id).first()
-        if result:
-            abort(409, message="Video ID taken")
-        video = VideoModel(id=video_id, name=args['name'], views=args['views'], likes=args['likes'])
-        db.session.add(video)
-        db.session.commit()
-        return video, 201
-
-    @marshal_with(resource_fields)
-    def patch(self, video_id):
-        args = video_update_args.parse_args()
-        result = VideoModel.query.filter_by(id=video_id).first()
-        if not result:
-            abort(404, message="Video doesn't exist")
-        if args['name']:
-            result.name = args['name']
-        if args['views']:
-            result.views = args['views']
-        if args['likes']:
-            result.likes = args['likes']
-        db.session.commit()
-
-        return result
-
-
-    def delete(self, video_id):
-        result = VideoModel.query.filter_by(id=video_id).first()
-        if not result:
-            abort(404, message="Video doesn't exist")
-        db.session.delete(result)
-        db.session.commit()
-        return '', 204
-
-api.add_resource(Video, "/video/<int:video_id>")
+            player_list = PlayerList()
+            response = player_list.post(players_data=players_data)
+            
+            print(f"Database insertion result: {response[0]['message']}")
+            if response[0].get('errors'):
+                print("\nErrors encountered:")
+                for error in response[0]['errors']:
+                    print(f"- {error}")
+            
+            return response[1] == 201
+            
+        except Exception as e:
+            print(f"Database loading failed: {e}")
+            return False
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    if not main():
+        print("\nPipeline failed at some step")
